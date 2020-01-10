@@ -1,13 +1,11 @@
 Name:           usbredir
-Version:        0.4.3
+Version:        0.5.1
 Release:        1%{?dist}
 Summary:        USB network redirection protocol libraries
 Group:          System Environment/Libraries
 License:        LGPLv2+
 URL:            http://spice-space.org/page/UsbRedir
 Source0:        http://spice-space.org/download/%{name}/%{name}-%{version}.tar.bz2
-Patch1:         0001-usbredirhost-Don-t-set-a-timeout-on-bulk-transfers.patch
-Patch2:         0002-usbredirhost-Properly-log-an-error-when-the-initial-.patch
 BuildRequires:  libusb1-devel >= 1.0.9
 ExcludeArch:    s390 s390x
 
@@ -50,8 +48,6 @@ A simple usb-host tcp server, using libusbredirhost.
 
 %prep
 %setup -q
-%patch1 -p1
-%patch2 -p1
 
 
 %build
@@ -88,9 +84,15 @@ rm $RPM_BUILD_ROOT%{_libdir}/libusbredir*.la
 
 
 %changelog
-* Tue Oct 30 2012 Hans de Goede <hdegoede@redhat.com> - 0.4.3-1.el6_3
-- Add 2 fixes from upstream fixing issues with some bulk devices
-- Resolves: rhbz#858776
+* Wed Sep 19 2012 Hans de Goede <hdegoede@redhat.com> - 0.5.1-1
+- Update to upstream 0.5.1 release
+- Resolves: rhbz#842356
+- Remove bulk packets time out, this fixes various devices not working
+- Resolves: rhbz#834560
+- Add support to libusbredirparser for state serialization
+- Resolves: rhbz#842316
+- Drop isochronous packets when the network is too slow to keep up
+- Resolves: rhbz#855737
 
 * Mon Apr  2 2012 Hans de Goede <hdegoede@redhat.com> - 0.4.3-1
 - Update to upstream 0.4.3 release

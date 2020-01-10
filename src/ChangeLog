@@ -1,3 +1,30 @@
+usbredir-0.5.1 19 September 2012
+--------------------------------
+-usbredirparser:
+ -usbredirparser_has_data_to_write now returns the write queue depth, instead
+  of only 0 or 1
+-usbredirhost:
+ -usbredirhost_has_data_to_write now returns the write queue depth, instead
+  of only 0 or 1
+ -when the write queue gets too large, drop isochronous input packets
+
+usbredir-0.5   7 September 2012
+-------------------------------
+-Windows support 
+-Add support for 64 bit packet ids
+-usbredirparser:
+ -Add state serialization support
+ -API and ABI changed to use 64 bit ids, all users need to be adjusted and
+  recompiled for this!!
+-usbredirhost:
+ -Remove bulk packets time out, this fixes various devices not working
+ -Ack packet cancels immediately
+ -Now supports 64 bits packet ids
+ -Use libusb_error_name instead of logging raw error codes
+-usbredirfilter_check return -ENOENT rather then -EPERM if no rules match a
+ device, this way the caller can differentiate between a deny caused by a
+ matching rule, and one caused by there being no matching rules.
+
 usbredir-0.4.3 2 April 2012
 ---------------------------
 -usbredirhost:

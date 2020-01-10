@@ -1,5 +1,5 @@
 AC_PREREQ(2.63)
-AC_INIT([usbredir], [0.4.3])
+AC_INIT([usbredir], [0.5.1])
 AC_CONFIG_SRCDIR([configure.ac])
 
 AM_CONFIG_HEADER([config.h])
@@ -13,7 +13,7 @@ dnl libtool versioning
 LIBUSBREDIRHOST_SO_VERSION=1:0:0
 AC_SUBST(LIBUSBREDIRHOST_SO_VERSION)
 
-LIBUSBREDIRPARSER_SO_VERSION=0:0:0
+LIBUSBREDIRPARSER_SO_VERSION=1:0:0
 AC_SUBST(LIBUSBREDIRPARSER_SO_VERSION)
 
 AM_INIT_AUTOMAKE([foreign dist-bzip2 no-dist-gzip])
@@ -25,6 +25,19 @@ AC_PROG_INSTALL
 AC_PROG_LN_S
 LT_INIT
 dnl AC_DEFINE(_GNU_SOURCE, [1], [Enable GNU extensions])
+
+AC_MSG_CHECKING([for native Win32])
+echo "host is $host"
+case "$host" in
+     *mingw*|*cygwin*)
+        os_win32=yes
+        ;;
+     *)
+        os_win32=no
+        ;;
+esac
+AC_MSG_RESULT([$os_win32])
+AM_CONDITIONAL([OS_WIN32],[test "$os_win32" = "yes"])
 
 # Set some sane default CFLAGS, avoid having to do another release like 0.4.1
 if test "$ac_test_CFLAGS" != set; then

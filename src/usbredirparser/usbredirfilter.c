@@ -23,6 +23,11 @@
 #include <string.h>
 #include <errno.h>
 
+#ifdef WIN32
+#include "strtok_r.h"
+#define strtok_r  glibc_strtok_r
+#endif
+
 #include "usbredirfilter.h"
 
 int usbredirfilter_string_to_rules(
@@ -156,7 +161,7 @@ static int usbredirfilter_check1(const struct usbredirfilter_rule *rules,
         }
     }
 
-    return default_allow ? 0 : -EPERM;
+    return default_allow ? 0 : -ENOENT;
 }
 
 int usbredirfilter_check(

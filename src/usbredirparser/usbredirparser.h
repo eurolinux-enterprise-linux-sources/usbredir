@@ -71,35 +71,35 @@ typedef void (*usbredirparser_interface_info)(void *priv,
 typedef void (*usbredirparser_ep_info)(void *priv,
     struct usb_redir_ep_info_header *ep_info);
 typedef void (*usbredirparser_set_configuration)(void *priv,
-    uint32_t id, struct usb_redir_set_configuration_header *set_configuration);
-typedef void (*usbredirparser_get_configuration)(void *priv, uint32_t id);
+    uint64_t id, struct usb_redir_set_configuration_header *set_configuration);
+typedef void (*usbredirparser_get_configuration)(void *priv, uint64_t id);
 typedef void (*usbredirparser_configuration_status)(void *priv,
-    uint32_t id, struct usb_redir_configuration_status_header *configuration_status);
+    uint64_t id, struct usb_redir_configuration_status_header *configuration_status);
 typedef void (*usbredirparser_set_alt_setting)(void *priv,
-    uint32_t id, struct usb_redir_set_alt_setting_header *set_alt_setting);
+    uint64_t id, struct usb_redir_set_alt_setting_header *set_alt_setting);
 typedef void (*usbredirparser_get_alt_setting)(void *priv,
-    uint32_t id, struct usb_redir_get_alt_setting_header *get_alt_setting);
+    uint64_t id, struct usb_redir_get_alt_setting_header *get_alt_setting);
 typedef void (*usbredirparser_alt_setting_status)(void *priv,
-    uint32_t id, struct usb_redir_alt_setting_status_header *alt_setting_status);
+    uint64_t id, struct usb_redir_alt_setting_status_header *alt_setting_status);
 typedef void (*usbredirparser_start_iso_stream)(void *priv,
-    uint32_t id, struct usb_redir_start_iso_stream_header *start_iso_stream);
+    uint64_t id, struct usb_redir_start_iso_stream_header *start_iso_stream);
 typedef void (*usbredirparser_stop_iso_stream)(void *priv,
-    uint32_t id, struct usb_redir_stop_iso_stream_header *stop_iso_stream);
+    uint64_t id, struct usb_redir_stop_iso_stream_header *stop_iso_stream);
 typedef void (*usbredirparser_iso_stream_status)(void *priv,
-    uint32_t id, struct usb_redir_iso_stream_status_header *iso_stream_status);
+    uint64_t id, struct usb_redir_iso_stream_status_header *iso_stream_status);
 typedef void (*usbredirparser_start_interrupt_receiving)(void *priv,
-    uint32_t id, struct usb_redir_start_interrupt_receiving_header *start_interrupt_receiving);
+    uint64_t id, struct usb_redir_start_interrupt_receiving_header *start_interrupt_receiving);
 typedef void (*usbredirparser_stop_interrupt_receiving)(void *priv,
-    uint32_t id, struct usb_redir_stop_interrupt_receiving_header *stop_interrupt_receiving);
+    uint64_t id, struct usb_redir_stop_interrupt_receiving_header *stop_interrupt_receiving);
 typedef void (*usbredirparser_interrupt_receiving_status)(void *priv,
-    uint32_t id, struct usb_redir_interrupt_receiving_status_header *interrupt_receiving_status);
+    uint64_t id, struct usb_redir_interrupt_receiving_status_header *interrupt_receiving_status);
 typedef void (*usbredirparser_alloc_bulk_streams)(void *priv,
-    uint32_t id, struct usb_redir_alloc_bulk_streams_header *alloc_bulk_streams);
+    uint64_t id, struct usb_redir_alloc_bulk_streams_header *alloc_bulk_streams);
 typedef void (*usbredirparser_free_bulk_streams)(void *priv,
-    uint32_t id, struct usb_redir_free_bulk_streams_header *free_bulk_streams);
+    uint64_t id, struct usb_redir_free_bulk_streams_header *free_bulk_streams);
 typedef void (*usbredirparser_bulk_streams_status)(void *priv,
-    uint32_t id, struct usb_redir_bulk_streams_status_header *bulk_streams_status);
-typedef void (*usbredirparser_cancel_data_packet)(void *priv, uint32_t id);
+    uint64_t id, struct usb_redir_bulk_streams_status_header *bulk_streams_status);
+typedef void (*usbredirparser_cancel_data_packet)(void *priv, uint64_t id);
 typedef void (*usbredirparser_filter_reject)(void *priv);
 /* Note that the ownership of the rules array is passed on to the callback. */
 typedef void (*usbredirparser_filter_filter)(void *priv,
@@ -112,16 +112,16 @@ typedef void (*usbredirparser_device_disconnect_ack)(void *priv);
    the callback. The callback should free it by calling
    usbredirparser_free_packet_data when it is done with it. */
 typedef void (*usbredirparser_control_packet)(void *priv,
-    uint32_t id, struct usb_redir_control_packet_header *control_header,
+    uint64_t id, struct usb_redir_control_packet_header *control_header,
     uint8_t *data, int data_len);
 typedef void (*usbredirparser_bulk_packet)(void *priv,
-    uint32_t id, struct usb_redir_bulk_packet_header *bulk_header,
+    uint64_t id, struct usb_redir_bulk_packet_header *bulk_header,
     uint8_t *data, int data_len);
 typedef void (*usbredirparser_iso_packet)(void *priv,
-    uint32_t id, struct usb_redir_iso_packet_header *iso_header,
+    uint64_t id, struct usb_redir_iso_packet_header *iso_header,
     uint8_t *data, int data_len);
 typedef void (*usbredirparser_interrupt_packet)(void *priv,
-    uint32_t id, struct usb_redir_interrupt_packet_header *interrupt_header,
+    uint64_t id, struct usb_redir_interrupt_packet_header *interrupt_header,
     uint8_t *data, int data_len);
 
 
@@ -193,6 +193,7 @@ void usbredirparser_caps_set_cap(uint32_t *caps, int cap);
 enum {
     usbredirparser_fl_usb_host = 0x01,
     usbredirparser_fl_write_cb_owns_buffer = 0x02,
+    usbredirparser_fl_no_hello = 0x04,
 };
 
 void usbredirparser_init(struct usbredirparser *parser,
@@ -221,10 +222,10 @@ enum {
 };
 int usbredirparser_do_read(struct usbredirparser *parser);
 
-/* If this returns true the parser has data queued to write to its peer */
+/* This returns the number of usbredir packets queued up for writing */
 int usbredirparser_has_data_to_write(struct usbredirparser *parser);
 
-/* Call this when usbredirparser_has_data_to_write returns true
+/* Call this when usbredirparser_has_data_to_write returns > 0
    returns 0 on success, -1 if a write error happened.
    If a write error happened, this function will retry writing any queued data
    on the next call, and will continue doing so until it has succeeded! */
@@ -258,70 +259,91 @@ void usbredirparser_send_interface_info(struct usbredirparser *parser,
 void usbredirparser_send_ep_info(struct usbredirparser *parser,
     struct usb_redir_ep_info_header *ep_info);
 void usbredirparser_send_set_configuration(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_set_configuration_header *set_configuration);
 void usbredirparser_send_get_configuration(struct usbredirparser *parser,
-    uint32_t id);
+    uint64_t id);
 void usbredirparser_send_configuration_status(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_configuration_status_header *configuration_status);
 void usbredirparser_send_set_alt_setting(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_set_alt_setting_header *set_alt_setting);
 void usbredirparser_send_get_alt_setting(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_get_alt_setting_header *get_alt_setting);
 void usbredirparser_send_alt_setting_status(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_alt_setting_status_header *alt_setting_status);
 void usbredirparser_send_start_iso_stream(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_start_iso_stream_header *start_iso_stream);
 void usbredirparser_send_stop_iso_stream(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_stop_iso_stream_header *stop_iso_stream);
 void usbredirparser_send_iso_stream_status(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_iso_stream_status_header *iso_stream_status);
 void usbredirparser_send_start_interrupt_receiving(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_start_interrupt_receiving_header *start_interrupt_receiving);
 void usbredirparser_send_stop_interrupt_receiving(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_stop_interrupt_receiving_header *stop_interrupt_receiving);
 void usbredirparser_send_interrupt_receiving_status(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_interrupt_receiving_status_header *interrupt_receiving_status);
 void usbredirparser_send_alloc_bulk_streams(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_alloc_bulk_streams_header *alloc_bulk_streams);
 void usbredirparser_send_free_bulk_streams(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_free_bulk_streams_header *free_bulk_streams);
 void usbredirparser_send_bulk_streams_status(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_bulk_streams_status_header *bulk_streams_status);
 void usbredirparser_send_cancel_data_packet(struct usbredirparser *parser,
-    uint32_t id);
+    uint64_t id);
 void usbredirparser_send_filter_reject(struct usbredirparser *parser);
 void usbredirparser_send_filter_filter(struct usbredirparser *parser,
     const struct usbredirfilter_rule *rules, int rules_count);
 /* Data packets: */
 void usbredirparser_send_control_packet(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_control_packet_header *control_header,
     uint8_t *data, int data_len);
 void usbredirparser_send_bulk_packet(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_bulk_packet_header *bulk_header,
     uint8_t *data, int data_len);
 void usbredirparser_send_iso_packet(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_iso_packet_header *iso_header,
     uint8_t *data, int data_len);
 void usbredirparser_send_interrupt_packet(struct usbredirparser *parser,
-    uint32_t id,
+    uint64_t id,
     struct usb_redir_interrupt_packet_header *interrupt_header,
     uint8_t *data, int data_len);
 
+
+/* Serialization */
+
+/* This function serializes the current usbredirparser state. It will allocate
+   a large enough buffer for this itself and store this in state_dest, it will
+   store the size of this buffer in state_len.
+
+   Return value: 0 on success, -1 on error (out of memory).
+
+   The buffer should be free-ed by the caller using free(). */
+int usbredirparser_serialize(struct usbredirparser *parser,
+                             uint8_t **state_dest, int *state_len);
+
+/* This function sets the current usbredirparser state from a serialized state.
+   This function assumes that the parser has just been initialized with the
+   usbredirparser_fl_no_hello flag.
+
+   Return value: 0 on success, -1 on error (out of memory, or
+                                            invalid state data). */
+int usbredirparser_unserialize(struct usbredirparser *parser_pub,
+                               uint8_t *state, int len);
 #endif
