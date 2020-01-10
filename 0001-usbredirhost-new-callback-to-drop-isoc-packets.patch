@@ -1,0 +1,173 @@
+From 821927d7c6d51e13c44a85fd42d72ba9bf468878 Mon Sep 17 00:00:00 2001
+From: Victor Toso <victortoso@redhat.com>
+Date: Wed, 9 Dec 2015 11:56:14 +0100
+Subject: [PATCH] usbredirhost: new callback to drop isoc packets
+
+downstream patch of a88e197b18785d6de2322b5f26484c4130a6f2b9
+---
+ usbredirhost/usbredirhost.c | 67 +++++++++++++++++++++++++++++++++++++++++----
+ usbredirhost/usbredirhost.h | 14 ++++++++++
+ 2 files changed, 76 insertions(+), 5 deletions(-)
+
+diff --git a/usbredirhost/usbredirhost.c b/usbredirhost/usbredirhost.c
+index d504bc4..5c581a1 100644
+--- a/usbredirhost/usbredirhost.c
++++ b/usbredirhost/usbredirhost.c
+@@ -24,6 +24,7 @@
+ #include <stdlib.h>
+ #include <stdarg.h>
+ #include <string.h>
++#include <stdbool.h>
+ #include <errno.h>
+ #include <unistd.h>
+ #include <inttypes.h>
+@@ -108,6 +109,7 @@ struct usbredirhost {
+     usbredirparser_read read_func;
+     usbredirparser_write write_func;
+     usbredirhost_flush_writes flush_writes_func;
++    usbredirhost_buffered_output_size buffered_output_size_func;
+     void *func_priv;
+     int verbose;
+     libusb_context *ctx;
+@@ -129,6 +131,11 @@ struct usbredirhost {
+     struct usbredirtransfer transfers_head;
+     struct usbredirfilter_rule *filter_rules;
+     int filter_rules_count;
++    struct {
++        uint64_t higher;
++        uint64_t lower;
++        bool dropping;
++    } iso_threshold;
+ };
+ 
+ struct usbredirhost_dev_ids {
+@@ -1013,6 +1020,17 @@ static int usbredirhost_submit_iso_transfer_unlocked(struct usbredirhost *host,
+     return usb_redir_success;
+ }
+ 
++void usbredirhost_set_buffered_output_size_cb(struct usbredirhost *host,
++    usbredirhost_buffered_output_size buffered_output_size_func)
++{
++    if (!host) {
++        ERROR("invalid usbredirhost");
++        return;
++    }
++
++    host->buffered_output_size_func = buffered_output_size_func;
++}
++
+ /* Return value:
+     0 All ok
+     1 Packet borked, continue with next packet / urb
+@@ -1081,6 +1099,30 @@ static int usbredirhost_handle_iso_status(struct usbredirhost *host,
+     }
+ }
+ 
++static int usbredirhost_can_write_iso_package(struct usbredirhost *host)
++{
++    uint64_t size;
++
++    if (!host->buffered_output_size_func)
++        return true;
++
++    size = host->buffered_output_size_func(host->func_priv);
++    if (size >= host->iso_threshold.higher) {
++        if (!host->iso_threshold.dropping)
++            DEBUG("START dropping isoc packets %lu buffer > %lu hi threshold",
++                  size, host->iso_threshold.higher);
++        host->iso_threshold.dropping = true;
++    } else if (size < host->iso_threshold.lower) {
++        if (host->iso_threshold.dropping)
++            DEBUG("STOP dropping isoc packets %lu buffer < %lu low threshold",
++                  size, host->iso_threshold.lower);
++
++        host->iso_threshold.dropping = false;
++    }
++
++    return !host->iso_threshold.dropping;
++}
++
+ static void LIBUSB_CALL usbredirhost_iso_packet_complete(
+     struct libusb_transfer *libusb_transfer)
+ {
+@@ -1154,11 +1196,13 @@ static void LIBUSB_CALL usbredirhost_iso_packet_complete(
+                then 0.1 sec, assume our connection is not keeping up and
+                start dropping packets. */
+             if (usbredirparser_has_data_to_write(host->parser) < 800) {
+-                DEBUG("iso-out ep %02X status %d len %d", ep, status, len);
+-                usbredirparser_send_iso_packet(host->parser, transfer->id,
+-                           &iso_packet,
+-                           libusb_get_iso_packet_buffer(libusb_transfer, i),
+-                           len);
++                if (usbredirhost_can_write_iso_package(host)) {
++                    DEBUG("iso-out ep %02X status %d len %d", ep, status, len);
++                    usbredirparser_send_iso_packet(host->parser, transfer->id,
++                               &iso_packet,
++                               libusb_get_iso_packet_buffer(libusb_transfer, i),
++                               len);
++                }
+             } else {
+                 if (host->endpoint[EP2I(ep)].warn_on_drop) {
+                     WARNING("iso stream on endpoint %02X, connection too slow, dropping packets", ep);
+@@ -1206,6 +1250,16 @@ unlock:
+     FLUSH(host);
+ }
+ 
++static void usbredirhost_set_iso_threshold(struct usbredirhost *host,
++    uint8_t pkts_per_transfer, uint8_t transfer_count, uint16_t max_packetsize)
++{
++    uint64_t reference = pkts_per_transfer * transfer_count * max_packetsize;
++    host->iso_threshold.lower = reference / 2;
++    host->iso_threshold.higher = reference * 3;
++    DEBUG("higher threshold is %lu bytes | lower threshold is %lu bytes",
++           host->iso_threshold.higher, host->iso_threshold.lower);
++}
++
+ static int usbredirhost_alloc_iso_stream(struct usbredirhost *host,
+     uint8_t ep, uint8_t pkts_per_transfer, uint8_t transfer_count)
+ {
+@@ -1252,6 +1306,9 @@ static int usbredirhost_alloc_iso_stream(struct usbredirhost *host,
+         libusb_set_iso_packet_lengths(
+             host->endpoint[EP2I(ep)].iso_transfer[i]->transfer,
+             host->endpoint[EP2I(ep)].max_packetsize);
++        usbredirhost_set_iso_threshold(
++            host, pkts_per_transfer,  transfer_count,
++            host->endpoint[EP2I(ep)].max_packetsize);
+     }
+     host->endpoint[EP2I(ep)].iso_out_idx = 0;
+     host->endpoint[EP2I(ep)].iso_drop_packets = 0;
+diff --git a/usbredirhost/usbredirhost.h b/usbredirhost/usbredirhost.h
+index 77fb8a2..311df04 100644
+--- a/usbredirhost/usbredirhost.h
++++ b/usbredirhost/usbredirhost.h
+@@ -29,6 +29,8 @@ struct usbredirhost;
+ 
+ typedef void (*usbredirhost_flush_writes)(void *priv);
+ 
++typedef uint64_t (*usbredirhost_buffered_output_size)(void *priv);
++
+ /* This function creates an usbredirhost instance, including its embedded
+    libusbredirparser instance and sends the initial usb_redir_hello packet to
+    the usb-guest.
+@@ -110,6 +112,18 @@ void usbredirhost_close(struct usbredirhost *host);
+ int usbredirhost_set_device(struct usbredirhost *host,
+                             libusb_device_handle *usb_dev_handle);
+ 
++/* Call this function to set a callback in usbredirhost.
++   The usbredirhost_buffered_output_size callback should return the
++   application's pending writes buffer size (in bytes).
++
++   usbredirhost will set two levels of threshold based in the information
++   provided by the usb device. In case the application's buffer is increasing
++   too much then usbredirhost uses the threshold limits to drop isochronous
++   packages but still send full frames whenever is possible.
++*/
++void usbredirhost_set_buffered_output_size_cb(struct usbredirhost *host,
++    usbredirhost_buffered_output_size buffered_output_size_func);
++
+ /* Call this whenever there is data ready for the usbredirhost to read from
+    the usb-guest
+    returns 0 on success, or an error code from the below enum on error.
+-- 
+2.5.0
+

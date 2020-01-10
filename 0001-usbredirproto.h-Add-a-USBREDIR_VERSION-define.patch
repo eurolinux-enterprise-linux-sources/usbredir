@@ -1,0 +1,26 @@
+From 24b41582343fb179be218b69588f890a02d60286 Mon Sep 17 00:00:00 2001
+From: Victor Toso <victortoso@redhat.com>
+Date: Wed, 9 Dec 2015 12:10:22 +0100
+Subject: [PATCH] usbredirproto.h: Add a USBREDIR_VERSION define
+
+downstream patch from: ef5168b9f2244297ca206394ac35a054812b308e
+---
+ usbredirparser/usbredirproto.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/usbredirparser/usbredirproto.h b/usbredirparser/usbredirproto.h
+index ede0e7f..939fd2a 100644
+--- a/usbredirparser/usbredirproto.h
++++ b/usbredirparser/usbredirproto.h
+@@ -42,6 +42,8 @@
+ 
+ #include <stdint.h>
+ 
++#define USBREDIR_VERSION 0x000503 /* 0.5 [.0] */
++
+ enum {
+     usb_redir_success,
+     usb_redir_cancelled,    /* The transfer was cancelled */
+-- 
+2.5.0
+
