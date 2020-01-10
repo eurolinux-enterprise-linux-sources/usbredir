@@ -1,11 +1,13 @@
 Name:           usbredir
 Version:        0.5.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        USB network redirection protocol libraries
 Group:          System Environment/Libraries
 License:        LGPLv2+
 URL:            http://spice-space.org/page/UsbRedir
 Source0:        http://spice-space.org/download/%{name}/%{name}-%{version}.tar.bz2
+Patch1:         0001-usbredirparser-Update-header-len-inside-the-usbredir.patch
+Patch2:         0001-usbredirhost-Add-a-do-not-reset-device-blacklist.patch
 BuildRequires:  libusb1-devel >= 1.0.9
 ExcludeArch:    s390 s390x
 
@@ -48,6 +50,8 @@ A simple usb-host tcp server, using libusbredirhost.
 
 %prep
 %setup -q
+%patch1 -p1
+%patch2 -p1
 
 
 %build
@@ -84,6 +88,14 @@ rm $RPM_BUILD_ROOT%{_libdir}/libusbredir*.la
 
 
 %changelog
+* Mon Mar  2 2015 Hans de Goede <hdegoede@redhat.com> - 0.5.1-2
+- Add upstream patch to fix usbredirparser headerlen bug when talking to
+  the standalone usbredirserver
+- Resolves: rhbz#1085318
+- Add upstream patch with do-not-reset-device-blacklist
+- Extend blacklist with 2798:0001
+- Resolves: rhbz#1115917
+
 * Wed Sep 19 2012 Hans de Goede <hdegoede@redhat.com> - 0.5.1-1
 - Update to upstream 0.5.1 release
 - Resolves: rhbz#842356

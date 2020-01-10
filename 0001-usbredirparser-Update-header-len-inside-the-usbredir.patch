@@ -1,0 +1,33 @@
+From 931a41c1c92410639a0e76e6fdd07482f06e4578 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Thu, 5 Sep 2013 16:25:13 +0200
+Subject: [PATCH] usbredirparser: Update header-len inside the
+ usbredirparser_do_read loop
+
+If we process the hello packet with the 64 bit id capability bit in the same
+loop as other packets (because they were send quickly after one each other),
+then we end up reading 48 bytes for the header of the next packets processed
+in the same loop, while we should read 64 bytes for them, causing the
+sender and receiver to get out of sync.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+---
+ usbredirparser/usbredirparser.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/usbredirparser/usbredirparser.c b/usbredirparser/usbredirparser.c
+index b60d3f4..b50ddec 100644
+--- a/usbredirparser/usbredirparser.c
++++ b/usbredirparser/usbredirparser.c
+@@ -1011,6 +1011,8 @@ int usbredirparser_do_read(struct usbredirparser *parser_pub)
+                 parser->data = NULL;
+                 if (!r)
+                     return -2;
++                /* header len may change if this was an hello packet */
++                header_len = usbredirparser_get_header_len(parser_pub);
+             }
+         }
+     }
+-- 
+2.3.1
+
