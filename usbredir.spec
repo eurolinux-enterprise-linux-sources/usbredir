@@ -6,6 +6,8 @@ Group:          System Environment/Libraries
 License:        LGPLv2+
 URL:            http://spice-space.org/page/UsbRedir
 Source0:        http://spice-space.org/download/%{name}/%{name}-%{version}.tar.bz2
+Patch1:         0001-usbredirhost-Don-t-set-a-timeout-on-bulk-transfers.patch
+Patch2:         0002-usbredirhost-Properly-log-an-error-when-the-initial-.patch
 BuildRequires:  libusb1-devel >= 1.0.9
 ExcludeArch:    s390 s390x
 
@@ -48,6 +50,8 @@ A simple usb-host tcp server, using libusbredirhost.
 
 %prep
 %setup -q
+%patch1 -p1
+%patch2 -p1
 
 
 %build
@@ -84,6 +88,10 @@ rm $RPM_BUILD_ROOT%{_libdir}/libusbredir*.la
 
 
 %changelog
+* Tue Oct 30 2012 Hans de Goede <hdegoede@redhat.com> - 0.4.3-1.el6_3
+- Add 2 fixes from upstream fixing issues with some bulk devices
+- Resolves: rhbz#858776
+
 * Mon Apr  2 2012 Hans de Goede <hdegoede@redhat.com> - 0.4.3-1
 - Update to upstream 0.4.3 release
 - Don't crash on devices in unconfigured state
