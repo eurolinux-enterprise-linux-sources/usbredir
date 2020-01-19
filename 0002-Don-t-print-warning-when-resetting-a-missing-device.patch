@@ -1,0 +1,42 @@
+From 39aa3c69f61bba28856a3eef3fe4ab37a3968e88 Mon Sep 17 00:00:00 2001
+From: Jonathon Jongsma <jjongsma@redhat.com>
+Date: Thu, 10 Aug 2017 10:41:57 -0500
+Subject: [PATCH usbredir] Don't print warning when resetting a missing device
+
+When usbredirhost clears the current device, it resets the device and
+attempts to re-attach the kernel driver for the device.  The current
+device is cleared when the API user explicitly sets a new device with
+usbredirhost_set_device().  However, some API users call
+usbredirhost_set_device(..., NULL) to clear the current device when the
+redirected device has been unplugged.  In this scenario, resetting the
+device will fail and print a warning to the terminal. Since this is an
+expected scenario, we should simply handle it rather than printing an
+warning.
+
+Resolves: rhbz#1442963
+Signed-off-by: Jonathon Jongsma <jjongsma@redhat.com>
+Acked-by: Frediano Ziglio <fziglio@redhat.com>
+---
+ usbredirhost/usbredirhost.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/usbredirhost/usbredirhost.c b/usbredirhost/usbredirhost.c
+index a6bf8b3..3666227 100644
+--- a/usbredirhost/usbredirhost.c
++++ b/usbredirhost/usbredirhost.c
+@@ -604,7 +604,11 @@ static void usbredirhost_release(struct usbredirhost *host, int attach_drivers)
+     if (!(host->quirks & QUIRK_DO_NOT_RESET)) {
+         r = libusb_reset_device(host->handle);
+         if (r != 0) {
+-            ERROR("error resetting device: %s", libusb_error_name(r));
++            /* if we're releasing the device because it was removed, resetting
++             * will fail. Don't print a warning in this situation */
++            if (r != LIBUSB_ERROR_NO_DEVICE) {
++                ERROR("error resetting device: %s", libusb_error_name(r));
++            }
+             return;
+         }
+     }
+-- 
+2.13.6
+

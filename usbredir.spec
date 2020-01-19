@@ -1,6 +1,6 @@
 Name:           usbredir
 Version:        0.7.1
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        USB network redirection protocol libraries
 Group:          System Environment/Libraries
 License:        LGPLv2+
@@ -8,6 +8,7 @@ URL:            https://www.spice-space.org
 Source0:        https://www.spice-space.org/download/%{name}/%{name}-%{version}.tar.bz2
 # Some patches from upstream git (drop at next rebase)
 Patch1:         0001-usbredirhost-Fix-Wformat-warning.patch
+Patch2:         0002-Don-t-print-warning-when-resetting-a-missing-device.patch
 BuildRequires:  libusb1-devel >= 1.0.20
 
 %description
@@ -48,6 +49,7 @@ A simple USB host TCP server, using libusbredirhost.
 %prep
 %setup -q
 %patch1 -p1
+%patch2 -p1
 
 
 %build
@@ -81,6 +83,10 @@ rm $RPM_BUILD_ROOT%{_libdir}/libusbredir*.la
 
 
 %changelog
+* Fri Nov 17 2017 Jonathon Jongsma <jjongsma@redhat.com> - 0.7.1-3
+- Don't print a warning when resetting a removed device
+  Resolves: rhbz#1442963
+
 * Tue Dec 20 2016 Pavel Grunt <pgrunt@redhat.com> - 0.7.1-2
 - Rebuild to add USB3 support
   Resolves: rhbz#976685
