@@ -1,17 +1,13 @@
 Name:           usbredir
-Version:        0.6
-Release:        7%{?dist}
+Version:        0.7.1
+Release:        1%{?dist}
 Summary:        USB network redirection protocol libraries
 Group:          System Environment/Libraries
 License:        LGPLv2+
 URL:            http://spice-space.org/page/UsbRedir
 Source0:        http://spice-space.org/download/%{name}/%{name}-%{version}.tar.bz2
 # Some patches from upstream git (drop at next rebase)
-Patch1:         0001-usbredirserver-Allow-connections-from-both-ipv6-and-.patch
-Patch2:         0002-usbredirserver-testclient-Error-check-fcntl-calls.patch
-Patch3:         0003-usbredirhost-Fix-coverity-sign_extension-warning.patch
-Patch4:         0004-usbredirhost-Use-libusb_set_auto_detach_kernel_drive.patch
-Patch5:         0005-usbredirparser-Update-header-len-inside-the-usbredir.patch
+Patch1:         0001-usbredirhost-Fix-Wformat-warning.patch
 BuildRequires:  libusb1-devel >= 1.0.9
 
 %description
@@ -52,10 +48,6 @@ A simple USB host TCP server, using libusbredirhost.
 %prep
 %setup -q
 %patch1 -p1
-%patch2 -p1
-%patch3 -p1
-%patch4 -p1
-%patch5 -p1
 
 
 %build
@@ -89,6 +81,17 @@ rm $RPM_BUILD_ROOT%{_libdir}/libusbredir*.la
 
 
 %changelog
+* Wed Jun  8 2016 Victor Toso <victortoso@redhat.com> - 0.7.1-1
+- Rebase to latest upstream: 0.7.1
+  Resolves: rhbz#1033101
+
+* Mon Feb 29 2016 Victor Toso <victortoso@redhat.com> - 0.6-8
+- Fix migration due lack of capabilities from source host
+  Resolves: rhbz#1185167
+- New callback to drop isoc packets in order to avoid high memory
+  consumption in the client
+  Resolves: rhbz#1312913
+
 * Fri Jan 24 2014 Daniel Mach <dmach@redhat.com> - 0.6-7
 - Mass rebuild 2014-01-24
 

@@ -1,0 +1,84 @@
+From 086ececd5f7f6bd8668f11d8811bf8badb9d8c5d Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fabiano=20Fid=C3=AAncio?= <fidencio@redhat.com>
+Date: Tue, 3 Nov 2015 10:35:22 +0100
+Subject: [PATCH] usbredirhost: Fix -Wformat warning
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Use "PRIu64" macro for printf-ing uint64_t variables, avoiding warnings
+like:
+usbredirhost.c: In function 'usbredirhost_can_write_iso_package':
+usbredirhost.c:1023:19: warning: format '%lu' expects argument of type 'long unsigned int', but argument 4 has type 'uint64_t {aka long long unsigned int}' [-Wformat=]
+             DEBUG("START dropping isoc packets %lu buffer > %lu hi threshold",
+                   ^
+usbredirhost.c:181:57: note: in definition of macro 'DEBUG'
+ #define DEBUG(...)   va_log(host, usbredirparser_debug, __VA_ARGS__)
+                                                         ^
+usbredirhost.c:1023:19: warning: format '%lu' expects argument of type 'long unsigned int', but argument 5 has type 'uint64_t {aka long long unsigned int}' [-Wformat=]
+             DEBUG("START dropping isoc packets %lu buffer > %lu hi threshold",
+                   ^
+usbredirhost.c:181:57: note: in definition of macro 'DEBUG'
+ #define DEBUG(...)   va_log(host, usbredirparser_debug, __VA_ARGS__)
+                                                         ^
+usbredirhost.c:1028:19: warning: format '%lu' expects argument of type 'long unsigned int', but argument 4 has type 'uint64_t {aka long long unsigned int}' [-Wformat=]
+             DEBUG("STOP dropping isoc packets %lu buffer < %lu low threshold",
+                   ^
+usbredirhost.c:181:57: note: in definition of macro 'DEBUG'
+ #define DEBUG(...)   va_log(host, usbredirparser_debug, __VA_ARGS__)
+                                                         ^
+usbredirhost.c:1028:19: warning: format '%lu' expects argument of type 'long unsigned int', but argument 5 has type 'uint64_t {aka long long unsigned int}' [-Wformat=]
+             DEBUG("STOP dropping isoc packets %lu buffer < %lu low threshold",
+                   ^
+usbredirhost.c:181:57: note: in definition of macro 'DEBUG'
+ #define DEBUG(...)   va_log(host, usbredirparser_debug, __VA_ARGS__)
+                                                         ^
+usbredirhost.c: In function 'usbredirhost_set_iso_threshold':
+usbredirhost.c:1162:11: warning: format '%lu' expects argument of type 'long unsigned int', but argument 4 has type 'uint64_t {aka long long unsigned int}' [-Wformat=]
+     DEBUG("higher threshold is %lu bytes | lower threshold is %lu bytes",
+           ^
+usbredirhost.c:181:57: note: in definition of macro 'DEBUG'
+ #define DEBUG(...)   va_log(host, usbredirparser_debug, __VA_ARGS__)
+                                                         ^
+usbredirhost.c:1162:11: warning: format '%lu' expects argument of type 'long unsigned int', but argument 5 has type 'uint64_t {aka long long unsigned int}' [-Wformat=]
+     DEBUG("higher threshold is %lu bytes | lower threshold is %lu bytes",
+           ^
+usbredirhost.c:181:57: note: in definition of macro 'DEBUG'
+ #define DEBUG(...)   va_log(host, usbredirparser_debug, __VA_ARGS__)
+
+Signed-off-by: Fabiano Fidêncio <fidencio@redhat.com>
+---
+ usbredirhost/usbredirhost.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/usbredirhost/usbredirhost.c b/usbredirhost/usbredirhost.c
+index adf9c5f..83baa3b 100644
+--- a/usbredirhost/usbredirhost.c
++++ b/usbredirhost/usbredirhost.c
+@@ -1020,12 +1020,12 @@ static int usbredirhost_can_write_iso_package(struct usbredirhost *host)
+     size = host->buffered_output_size_func(host->func_priv);
+     if (size >= host->iso_threshold.higher) {
+         if (!host->iso_threshold.dropping)
+-            DEBUG("START dropping isoc packets %lu buffer > %lu hi threshold",
++            DEBUG("START dropping isoc packets %" PRIu64 " buffer > %" PRIu64 " hi threshold",
+                   size, host->iso_threshold.higher);
+         host->iso_threshold.dropping = true;
+     } else if (size < host->iso_threshold.lower) {
+         if (host->iso_threshold.dropping)
+-            DEBUG("STOP dropping isoc packets %lu buffer < %lu low threshold",
++            DEBUG("STOP dropping isoc packets %" PRIu64 " buffer < %" PRIu64 " low threshold",
+                   size, host->iso_threshold.lower);
+ 
+         host->iso_threshold.dropping = false;
+@@ -1159,7 +1159,7 @@ static void usbredirhost_set_iso_threshold(struct usbredirhost *host,
+     uint64_t reference = pkts_per_transfer * transfer_count * max_packetsize;
+     host->iso_threshold.lower = reference / 2;
+     host->iso_threshold.higher = reference * 3;
+-    DEBUG("higher threshold is %lu bytes | lower threshold is %lu bytes",
++    DEBUG("higher threshold is %" PRIu64 " bytes | lower threshold is %" PRIu64 " bytes",
+            host->iso_threshold.higher, host->iso_threshold.lower);
+ }
+ 
+-- 
+2.5.5
+

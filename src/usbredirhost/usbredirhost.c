@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
@@ -95,6 +96,7 @@ struct usbredirhost_ep {
     int out_idx;
     int drop_packets;
     int max_packetsize;
+    unsigned int max_streams;
     struct usbredirtransfer *transfer[MAX_TRANSFER_COUNT];
 };
 
@@ -108,6 +110,7 @@ struct usbredirhost {
     usbredirparser_read read_func;
     usbredirparser_write write_func;
     usbredirhost_flush_writes flush_writes_func;
+    usbredirhost_buffered_output_size buffered_output_size_func;
     void *func_priv;
     int verbose;
     libusb_context *ctx;
@@ -129,6 +132,11 @@ struct usbredirhost {
     struct usbredirtransfer transfers_head;
     struct usbredirfilter_rule *filter_rules;
     int filter_rules_count;
+    struct {
+        uint64_t higher;
+        uint64_t lower;
+        bool dropping;
+    } iso_threshold;
 };
 
 struct usbredirhost_dev_ids {
@@ -138,6 +146,7 @@ struct usbredirhost_dev_ids {
 
 static const struct usbredirhost_dev_ids usbredirhost_reset_blacklist[] = {
     { 0x1210, 0x001c },
+    { 0x2798, 0x0001 },
     { -1, -1 } /* Terminating Entry */
 };
 
@@ -218,7 +227,9 @@ static void LIBUSB_CALL usbredirhost_iso_packet_complete(
     struct libusb_transfer *libusb_transfer);
 static void LIBUSB_CALL usbredirhost_buffered_packet_complete(
     struct libusb_transfer *libusb_transfer);
-static int usbredirhost_cancel_pending_urbs(struct usbredirhost *host);
+static int usbredirhost_cancel_pending_urbs(struct usbredirhost *host,
+                                            int notify_guest);
+static void usbredirhost_wait_for_cancel_completion(struct usbredirhost *host);
 static void usbredirhost_clear_device(struct usbredirhost *host);
 
 static void usbredirhost_log(void *priv, int level, const char *msg)
@@ -326,6 +337,26 @@ static void usbredirhost_set_max_packetsize(struct usbredirhost *host,
     host->endpoint[EP2I(ep)].max_packetsize = maxp * mult;
 }
 
+static void usbredirhost_set_max_streams(struct usbredirhost *host,
+    const struct libusb_endpoint_descriptor *endp)
+{
+#if LIBUSBX_API_VERSION >= 0x01000102
+    struct libusb_ss_endpoint_companion_descriptor *endp_ss_comp;
+    int max_streams, i = EP2I(endp->bEndpointAddress);
+
+    host->endpoint[i].max_streams = 0;
+
+    if (host->endpoint[i].type == usb_redir_type_bulk &&
+            libusb_get_ss_endpoint_companion_descriptor(host->ctx, endp,
+                &endp_ss_comp) == LIBUSB_SUCCESS) {
+        max_streams = endp_ss_comp->bmAttributes & 0x1f;
+        if (max_streams)
+            host->endpoint[i].max_streams = 1 << max_streams;
+        libusb_free_ss_endpoint_companion_descriptor(endp_ss_comp);
+    }
+#endif
+}
+
 /* Called from open/close and parser read callbacks */
 static void usbredirhost_send_interface_n_ep_info(struct usbredirhost *host)
 {
@@ -353,6 +384,7 @@ static void usbredirhost_send_interface_n_ep_info(struct usbredirhost *host)
         ep_info.interval[i] = host->endpoint[i].interval;
         ep_info.interface[i] = host->endpoint[i].interface;
         ep_info.max_packet_size[i] = host->endpoint[i].max_packetsize;
+        ep_info.max_streams[i] = host->endpoint[i].max_streams;
     }
     usbredirparser_send_ep_info(host->parser, &ep_info);
 }
@@ -422,6 +454,7 @@ static void usbredirhost_parse_interface(struct usbredirhost *host, int i)
             intf_desc->bInterfaceNumber;
         usbredirhost_set_max_packetsize(host, ep_address,
                                         intf_desc->endpoint[j].wMaxPacketSize);
+        usbredirhost_set_max_streams(host, &intf_desc->endpoint[j]);
         host->endpoint[EP2I(ep_address)].warn_on_drop = 1;
     }
 }
@@ -439,6 +472,7 @@ static void usbredirhost_parse_config(struct usbredirhost *host)
         host->endpoint[i].interval = 0;
         host->endpoint[i].interface = 0;
         host->endpoint[i].max_packetsize = 0;
+        host->endpoint[i].max_streams = 0;
     }
 
     for (i = 0; host->config && i < host->config->bNumInterfaces; i++) {
@@ -499,9 +533,13 @@ static int usbredirhost_claim(struct usbredirhost *host, int initial_claim)
     memset(host->alt_setting, 0, MAX_INTERFACES);
 
     host->claimed = 1;
+#if LIBUSBX_API_VERSION >= 0x01000102
+    libusb_set_auto_detach_kernel_driver(host->handle, 1);
+#endif
     for (i = 0; host->config && i < host->config->bNumInterfaces; i++) {
         n = host->config->interface[i].altsetting[0].bInterfaceNumber;
 
+#if LIBUSBX_API_VERSION < 0x01000102
         r = libusb_detach_kernel_driver(host->handle, n);
         if (r < 0 && r != LIBUSB_ERROR_NOT_FOUND
                   && r != LIBUSB_ERROR_NOT_SUPPORTED) {
@@ -509,6 +547,7 @@ static int usbredirhost_claim(struct usbredirhost *host, int initial_claim)
                   n, host->config->bConfigurationValue, libusb_error_name(r));
             return libusb_status_or_error_to_redir_status(host, r);
         }
+#endif
 
         r = libusb_claim_interface(host->handle, n);
         if (r < 0) {
@@ -534,6 +573,16 @@ static void usbredirhost_release(struct usbredirhost *host, int attach_drivers)
     if (!host->claimed)
         return;
 
+#if LIBUSBX_API_VERSION >= 0x01000102
+    /* We want to always do the attach ourselves because:
+       1) For compound interfaces such as usb-audio we must first release all
+          interfaces before we can attach the driver;
+       2) When releasing interfaces before calling libusb_set_configuration,
+          we don't want the kernel driver to get attached (our attach_drivers
+          parameter is 0 in this case). */
+    libusb_set_auto_detach_kernel_driver(host->handle, 0);
+#endif
+
     for (i = 0; host->config && i < host->config->bNumInterfaces; i++) {
         n = host->config->interface[i].altsetting[0].bInterfaceNumber;
 
@@ -549,6 +598,16 @@ static void usbredirhost_release(struct usbredirhost *host, int attach_drivers)
         return;
 
     host->claimed = 0;
+
+    /* reset the device before re-binding the kernel drivers, so that the
+       kernel drivers get the device in a clean state. */
+    if (!(host->quirks & QUIRK_DO_NOT_RESET)) {
+        r = libusb_reset_device(host->handle);
+        if (r != 0) {
+            ERROR("error resetting device: %s", libusb_error_name(r));
+            return;
+        }
+    }
 
     if (host->config)
         current_config = host->config->bConfigurationValue;
@@ -680,6 +739,9 @@ struct usbredirhost *usbredirhost_open_full(
     usbredirparser_caps_set_cap(caps, usb_redir_cap_64bits_ids);
     usbredirparser_caps_set_cap(caps, usb_redir_cap_32bits_bulk_length);
     usbredirparser_caps_set_cap(caps, usb_redir_cap_bulk_receiving);
+#if LIBUSBX_API_VERSION >= 0x01000103
+    usbredirparser_caps_set_cap(caps, usb_redir_cap_bulk_streams);
+#endif
 
     usbredirparser_init(host->parser, version, caps, USB_REDIR_CAPS_SIZE,
                         parser_flags);
@@ -774,21 +836,11 @@ int usbredirhost_set_device(struct usbredirhost *host,
 
 static void usbredirhost_clear_device(struct usbredirhost *host)
 {
-    int wait;
-    struct timeval tv;
-
     if (!host->dev)
         return;
 
-    wait = usbredirhost_cancel_pending_urbs(host);
-    while (wait) {
-        memset(&tv, 0, sizeof(tv));
-        tv.tv_usec = 2500;
-        libusb_handle_events_timeout(host->ctx, &tv);
-        LOCK(host);
-        wait = host->cancels_pending || host->transfers_head.next;
-        UNLOCK(host);
-    }
+    if (usbredirhost_cancel_pending_urbs(host, 0))
+        usbredirhost_wait_for_cancel_completion(host);
 
     usbredirhost_release(host, 1);
 
@@ -958,6 +1010,30 @@ static void usbredirhost_send_stream_status(struct usbredirhost *host,
     }
 }
 
+static int usbredirhost_can_write_iso_package(struct usbredirhost *host)
+{
+    uint64_t size;
+
+    if (!host->buffered_output_size_func)
+        return true;
+
+    size = host->buffered_output_size_func(host->func_priv);
+    if (size >= host->iso_threshold.higher) {
+        if (!host->iso_threshold.dropping)
+            DEBUG("START dropping isoc packets %lu buffer > %lu hi threshold",
+                  size, host->iso_threshold.higher);
+        host->iso_threshold.dropping = true;
+    } else if (size < host->iso_threshold.lower) {
+        if (host->iso_threshold.dropping)
+            DEBUG("STOP dropping isoc packets %lu buffer < %lu low threshold",
+                  size, host->iso_threshold.lower);
+
+        host->iso_threshold.dropping = false;
+    }
+
+    return !host->iso_threshold.dropping;
+}
+
 static void usbredirhost_send_stream_data(struct usbredirhost *host,
     uint64_t id, uint8_t ep, uint8_t status, uint8_t *data, int len)
 {
@@ -983,8 +1059,10 @@ static void usbredirhost_send_stream_data(struct usbredirhost *host,
             .status   = status,
             .length   = len,
         };
-        usbredirparser_send_iso_packet(host->parser, id, &iso_packet,
-                                       data, len);
+
+        if (usbredirhost_can_write_iso_package(host))
+            usbredirparser_send_iso_packet(host->parser, id, &iso_packet,
+                                           data, len);
         break;
     }
     case usb_redir_type_bulk: {
@@ -1041,7 +1119,8 @@ static int usbredirhost_submit_stream_transfer_unlocked(
 static int usbredirhost_start_stream_unlocked(struct usbredirhost *host,
     uint8_t ep)
 {
-    int i, status, count = host->endpoint[EP2I(ep)].transfer_count;
+    unsigned int i, count = host->endpoint[EP2I(ep)].transfer_count;
+    int status;
 
     /* For out endpoints 1/2 the transfers are a buffer for usb-guest data */
     if (!(ep & LIBUSB_ENDPOINT_IN)) {
@@ -1072,6 +1151,16 @@ static void usbredirhost_stop_stream(struct usbredirhost *host,
     usbredirhost_cancel_stream(host, ep);
     usbredirhost_send_stream_status(host, id, ep, usb_redir_success);
     FLUSH(host);
+}
+
+static void usbredirhost_set_iso_threshold(struct usbredirhost *host,
+    uint8_t pkts_per_transfer, uint8_t transfer_count, uint16_t max_packetsize)
+{
+    uint64_t reference = pkts_per_transfer * transfer_count * max_packetsize;
+    host->iso_threshold.lower = reference / 2;
+    host->iso_threshold.higher = reference * 3;
+    DEBUG("higher threshold is %lu bytes | lower threshold is %lu bytes",
+           host->iso_threshold.higher, host->iso_threshold.lower);
 }
 
 /* Called from both parser read and packet complete callbacks */
@@ -1132,6 +1221,10 @@ static void usbredirhost_alloc_stream_unlocked(struct usbredirhost *host,
                 host->endpoint[EP2I(ep)].transfer[i], ISO_TIMEOUT);
             libusb_set_iso_packet_lengths(
                 host->endpoint[EP2I(ep)].transfer[i]->transfer, pkt_size);
+
+            usbredirhost_set_iso_threshold(
+                host, pkts_per_transfer,  transfer_count,
+                host->endpoint[EP2I(ep)].max_packetsize);
             break;
         case usb_redir_type_bulk:
             libusb_fill_bulk_transfer(
@@ -1209,13 +1302,16 @@ static void usbredirhost_clear_stream_stall_unlocked(
 /**************************************************************************/
 
 /* Called from close and parser read callbacks */
-static int usbredirhost_cancel_pending_urbs(struct usbredirhost *host)
+static int usbredirhost_cancel_pending_urbs(struct usbredirhost *host,
+                                            int notify_guest)
 {
     struct usbredirtransfer *t;
     int i, wait;
 
     LOCK(host);
     for (i = 0; i < MAX_ENDPOINTS; i++) {
+        if (notify_guest && host->endpoint[i].transfer_count)
+            usbredirhost_send_stream_status(host, 0, I2EP(i), usb_redir_stall);
         usbredirhost_cancel_stream_unlocked(host, I2EP(i));
     }
 
@@ -1226,8 +1322,27 @@ static int usbredirhost_cancel_pending_urbs(struct usbredirhost *host)
     }
     UNLOCK(host);
 
+    if (notify_guest)
+        FLUSH(host);
+
     return wait;
 }
+
+/* Called from close and parser read callbacks */
+void usbredirhost_wait_for_cancel_completion(struct usbredirhost *host)
+{
+    int wait;
+    struct timeval tv;
+
+    do {
+        memset(&tv, 0, sizeof(tv));
+        tv.tv_usec = 2500;
+        libusb_handle_events_timeout(host->ctx, &tv);
+        LOCK(host);
+        wait = host->cancels_pending || host->transfers_head.next;
+        UNLOCK(host);
+    } while (wait);
+}  
 
 /* Only called from read callbacks */
 static void usbredirhost_cancel_pending_urbs_on_interface(
@@ -1289,6 +1404,17 @@ static void usbredirhost_log_data(struct usbredirhost *host, const char *desc,
 }
 
 /**************************************************************************/
+
+void usbredirhost_set_buffered_output_size_cb(struct usbredirhost *host,
+    usbredirhost_buffered_output_size buffered_output_size_func)
+{
+    if (!host) {
+        ERROR("invalid usbredirhost");
+        return;
+    }
+
+    host->buffered_output_size_func = buffered_output_size_func;
+}
 
 /* Return value:
     0 All ok
@@ -1491,6 +1617,17 @@ static void usbredirhost_reset(void *priv)
         return;
     }
 
+    /*
+     * The guest should have cancelled any pending urbs already, but the
+     * cancellations may be awaiting completion, and if we then do a reset
+     * they will complete with an error code of LIBUSB_TRANSFER_NO_DEVICE.
+     *
+     * And we also need to cleanly shutdown any streams (and let the guest
+     * know they should be restarted after the reset).
+     */
+    if (usbredirhost_cancel_pending_urbs(host, 1))
+        usbredirhost_wait_for_cancel_completion(host);
+
     r = usbredirhost_reset_device(host);
     if (r != 0) {
         host->read_status = usbredirhost_read_device_lost;
@@ -1518,7 +1655,7 @@ static void usbredirhost_set_configuration(void *priv, uint64_t id,
 
     host->reset = 0;
 
-    usbredirhost_cancel_pending_urbs(host);
+    usbredirhost_cancel_pending_urbs(host, 0);
     usbredirhost_release(host, 0);
 
     r = libusb_set_configuration(host->handle, set_config->configuration);
@@ -1690,16 +1827,75 @@ static void usbredirhost_stop_interrupt_receiving(void *priv, uint64_t id,
     usbredirhost_stop_stream(priv, id, stop_interrupt_receiving->endpoint);
 }
 
+#if LIBUSBX_API_VERSION >= 0x01000103
+static int usbredirhost_ep_mask_to_eps(uint32_t ep_mask, unsigned char *eps)
+{
+    int i, j;
+
+    for (i = 0, j = 0; i < MAX_ENDPOINTS; i++) {
+        if (ep_mask & (1 << i))
+            eps[j++] = I2EP(i);
+    }
+
+    return j;
+}
+#endif
+
 static void usbredirhost_alloc_bulk_streams(void *priv, uint64_t id,
     struct usb_redir_alloc_bulk_streams_header *alloc_bulk_streams)
 {
-    /* struct usbredirhost *host = priv; */
+#if LIBUSBX_API_VERSION >= 0x01000103
+    struct usbredirhost *host = priv;
+    unsigned char eps[MAX_ENDPOINTS];
+    int r, no_eps;
+    struct usb_redir_bulk_streams_status_header streams_status = {
+        .endpoints = alloc_bulk_streams->endpoints,
+        .no_streams = alloc_bulk_streams->no_streams,
+        .status = usb_redir_success,
+    };
+
+    no_eps = usbredirhost_ep_mask_to_eps(alloc_bulk_streams->endpoints, eps);
+    r = libusb_alloc_streams(host->handle, alloc_bulk_streams->no_streams,
+                             eps, no_eps);
+    if (r < 0) {
+        ERROR("could not alloc bulk streams: %s", libusb_error_name(r));
+        streams_status.status =
+            libusb_status_or_error_to_redir_status(host, r);
+    } else if (r < alloc_bulk_streams->no_streams) {
+        ERROR("tried to alloc %u bulk streams but got only %d",
+              alloc_bulk_streams->no_streams, r);
+        streams_status.status = usb_redir_ioerror;
+    }
+
+    usbredirparser_send_bulk_streams_status(host->parser, id, &streams_status);
+    FLUSH(host);
+#endif
 }
 
 static void usbredirhost_free_bulk_streams(void *priv, uint64_t id,
     struct usb_redir_free_bulk_streams_header *free_bulk_streams)
 {
-    /* struct usbredirhost *host = priv; */
+#if LIBUSBX_API_VERSION >= 0x01000103
+    struct usbredirhost *host = priv;
+    unsigned char eps[MAX_ENDPOINTS];
+    int r, no_eps;
+    struct usb_redir_bulk_streams_status_header streams_status = {
+        .endpoints = free_bulk_streams->endpoints,
+        .no_streams = 0,
+        .status = usb_redir_success,
+    };
+
+    no_eps = usbredirhost_ep_mask_to_eps(free_bulk_streams->endpoints, eps);
+    r = libusb_free_streams(host->handle, eps, no_eps);
+    if (r < 0) {
+        ERROR("could not free bulk streams: %s", libusb_error_name(r));
+        streams_status.status =
+            libusb_status_or_error_to_redir_status(host, r);
+    }
+
+    usbredirparser_send_bulk_streams_status(host->parser, id, &streams_status);
+    FLUSH(host);
+#endif
 }
 
 static void usbredirhost_filter_reject(void *priv)
@@ -1785,7 +1981,9 @@ static void usbredirhost_cancel_data_packet(void *priv, uint64_t id)
 
     LOCK(host);
     for (t = host->transfers_head.next; t; t = t->next) {
-        if (t->id == id) {
+        /* After cancellation the guest may re-use the id, so skip already
+           cancelled packets */
+        if (!t->cancelled && t->id == id) {
             break;
         }
     }
@@ -1804,14 +2002,21 @@ static void usbredirhost_cancel_data_packet(void *priv, uint64_t id)
             control_packet.length = 0;
             usbredirparser_send_control_packet(host->parser, t->id,
                                                &control_packet, NULL, 0);
+            DEBUG("cancelled control packet ep %02x id %"PRIu64,
+                  control_packet.endpoint, id);
             break;
         case LIBUSB_TRANSFER_TYPE_BULK:
+#if LIBUSBX_API_VERSION >= 0x01000103
+        case LIBUSB_TRANSFER_TYPE_BULK_STREAM:
+#endif
             bulk_packet = t->bulk_packet;
             bulk_packet.status = usb_redir_cancelled;
             bulk_packet.length = 0;
             bulk_packet.length_high = 0;
             usbredirparser_send_bulk_packet(host->parser, t->id,
                                                &bulk_packet, NULL, 0);
+            DEBUG("cancelled bulk packet ep %02x id %"PRIu64,
+                  bulk_packet.endpoint, id);
             break;
         case LIBUSB_TRANSFER_TYPE_INTERRUPT:
             interrupt_packet = t->interrupt_packet;
@@ -1819,10 +2024,14 @@ static void usbredirhost_cancel_data_packet(void *priv, uint64_t id)
             interrupt_packet.length = 0;
             usbredirparser_send_interrupt_packet(host->parser, t->id,
                                                  &interrupt_packet, NULL, 0);
+            DEBUG("cancelled interrupt packet ep %02x id %"PRIu64,
+                  interrupt_packet.endpoint, id);
             break;
         }
-    }
+    } else
+        DEBUG("cancel packet id %"PRIu64" not found", id);
     UNLOCK(host);
+    FLUSH(host);
 }
 
 static void LIBUSB_CALL usbredirhost_control_packet_complete(
@@ -1832,15 +2041,16 @@ static void LIBUSB_CALL usbredirhost_control_packet_complete(
     struct usbredirtransfer *transfer = libusb_transfer->user_data;
     struct usbredirhost *host = transfer->host;
 
+    LOCK(host);
+
     control_packet = transfer->control_packet;
     control_packet.status = libusb_status_or_error_to_redir_status(host,
                                                   libusb_transfer->status);
     control_packet.length = libusb_transfer->actual_length;
 
-    DEBUG("control complete ep %02X status %d len %d", control_packet.endpoint,
-          control_packet.status, control_packet.length);
-
-    LOCK(host);
+    DEBUG("control complete ep %02X status %d len %d id %"PRIu64,
+          control_packet.endpoint, control_packet.status,
+          control_packet.length, transfer->id);
 
     if (!transfer->cancelled) {
         if (control_packet.endpoint & LIBUSB_ENDPOINT_IN) {
@@ -1882,6 +2092,9 @@ static void usbredirhost_control_packet(void *priv, uint64_t id,
     struct usbredirtransfer *transfer;
     unsigned char *buffer;
     int r;
+
+    DEBUG("control submit ep %02X len %d id %"PRIu64, ep,
+          control_packet->length, id);
 
     if (host->disconnected) {
         usbredirhost_send_control_status(host, id, control_packet,
@@ -1969,16 +2182,17 @@ static void LIBUSB_CALL usbredirhost_bulk_packet_complete(
     struct usbredirtransfer *transfer = libusb_transfer->user_data;
     struct usbredirhost *host = transfer->host;
 
+    LOCK(host);
+
     bulk_packet = transfer->bulk_packet;
     bulk_packet.status = libusb_status_or_error_to_redir_status(host,
                                                   libusb_transfer->status);
     bulk_packet.length = libusb_transfer->actual_length;
     bulk_packet.length_high = libusb_transfer->actual_length >> 16;
 
-    DEBUG("bulk complete ep %02X status %d len %d", bulk_packet.endpoint,
-          bulk_packet.status, libusb_transfer->actual_length);
-
-    LOCK(host);
+    DEBUG("bulk complete ep %02X status %d len %d id %"PRIu64,
+          bulk_packet.endpoint, bulk_packet.status,
+          libusb_transfer->actual_length, transfer->id);
 
     if (!transfer->cancelled) {
         if (bulk_packet.endpoint & LIBUSB_ENDPOINT_IN) {
@@ -2020,7 +2234,7 @@ static void usbredirhost_bulk_packet(void *priv, uint64_t id,
     struct usbredirtransfer *transfer;
     int r;
 
-    DEBUG("bulk submit ep %02X len %d", ep, len);
+    DEBUG("bulk submit ep %02X len %d id %"PRIu64, ep, len, id);
 
     if (host->disconnected) {
         usbredirhost_send_bulk_status(host, id, bulk_packet,
@@ -2058,9 +2272,21 @@ static void usbredirhost_bulk_packet(void *priv, uint64_t id,
 
     host->reset = 0;
 
-    libusb_fill_bulk_transfer(transfer->transfer, host->handle, ep, data, len,
-                              usbredirhost_bulk_packet_complete,
-                              transfer, BULK_TIMEOUT);
+    if (bulk_packet->stream_id) {
+#if LIBUSBX_API_VERSION >= 0x01000103
+        libusb_fill_bulk_stream_transfer(transfer->transfer, host->handle, ep,
+                                         bulk_packet->stream_id, data, len,
+                                         usbredirhost_bulk_packet_complete,
+                                         transfer, BULK_TIMEOUT);
+#else
+        r = LIBUSB_ERROR_INVALID_PARAM;
+        goto error;
+#endif
+    } else {
+        libusb_fill_bulk_transfer(transfer->transfer, host->handle, ep,
+                                  data, len, usbredirhost_bulk_packet_complete,
+                                  transfer, BULK_TIMEOUT);
+    }
     transfer->id = id;
     transfer->bulk_packet = *bulk_packet;
 
@@ -2068,6 +2294,9 @@ static void usbredirhost_bulk_packet(void *priv, uint64_t id,
 
     r = libusb_submit_transfer(transfer->transfer);
     if (r < 0) {
+#if LIBUSBX_API_VERSION < 0x01000103
+error:
+#endif
         ERROR("error submitting bulk transfer on ep %02X: %s",
               ep, libusb_error_name(r));
         transfer->transfer->actual_length = 0;
@@ -2179,16 +2408,17 @@ static void LIBUSB_CALL usbredirhost_interrupt_out_packet_complete(
     struct usb_redir_interrupt_packet_header interrupt_packet;
     struct usbredirhost *host = transfer->host;
 
+    LOCK(host);
+
     interrupt_packet = transfer->interrupt_packet;
     interrupt_packet.status = libusb_status_or_error_to_redir_status(host,
                                                     libusb_transfer->status);
     interrupt_packet.length = libusb_transfer->actual_length;
 
-    DEBUG("interrupt out complete ep %02X status %d len %d",
+    DEBUG("interrupt out complete ep %02X status %d len %d id %"PRIu64,
           interrupt_packet.endpoint, interrupt_packet.status,
-          interrupt_packet.length);
+          interrupt_packet.length, transfer->id);
 
-    LOCK(host);
     if (!transfer->cancelled) {
         usbredirparser_send_interrupt_packet(host->parser, transfer->id,
                                              &interrupt_packet, NULL, 0);
@@ -2217,7 +2447,8 @@ static void usbredirhost_interrupt_packet(void *priv, uint64_t id,
     struct usbredirtransfer *transfer;
     int r;
 
-    DEBUG("interrupt submit ep %02X len %d", ep, interrupt_packet->length);
+    DEBUG("interrupt submit ep %02X len %d id %"PRIu64, ep,
+          interrupt_packet->length, id);
 
     if (host->disconnected) {
         usbredirhost_send_interrupt_status(host, id, interrupt_packet,

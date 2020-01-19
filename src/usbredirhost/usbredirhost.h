@@ -25,9 +25,15 @@
 #include "usbredirparser.h"
 #include "usbredirfilter.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct usbredirhost;
 
 typedef void (*usbredirhost_flush_writes)(void *priv);
+
+typedef uint64_t (*usbredirhost_buffered_output_size)(void *priv);
 
 /* This function creates an usbredirhost instance, including its embedded
    libusbredirparser instance and sends the initial usb_redir_hello packet to
@@ -110,6 +116,18 @@ void usbredirhost_close(struct usbredirhost *host);
 int usbredirhost_set_device(struct usbredirhost *host,
                             libusb_device_handle *usb_dev_handle);
 
+/* Call this function to set a callback in usbredirhost.
+   The usbredirhost_buffered_output_size callback should return the
+   application's pending writes buffer size (in bytes).
+
+   usbredirhost will set two levels of threshold based in the information
+   provided by the usb device. In case the application's buffer is increasing
+   too much then usbredirhost uses the threshold limits to drop isochronous
+   packages but still send full frames whenever is possible.
+*/
+void usbredirhost_set_buffered_output_size_cb(struct usbredirhost *host,
+    usbredirhost_buffered_output_size buffered_output_size_func);
+
 /* Call this whenever there is data ready for the usbredirhost to read from
    the usb-guest
    returns 0 on success, or an error code from the below enum on error.
@@ -160,5 +178,9 @@ void usbredirhost_get_guest_filter(struct usbredirhost *host,
        it returns the return value of the usbredirfilter_check call. */
 int usbredirhost_check_device_filter(const struct usbredirfilter_rule *rules,
     int rules_count, libusb_device *dev, int flags);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

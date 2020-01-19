@@ -36,6 +36,7 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include "usbredirparser.h"
 
 /* Macros to go from an endpoint address to an index for our ep array */
@@ -189,7 +190,7 @@ static void quit_handler(int sig)
 
 int main(int argc, char *argv[])
 {
-    int o;
+    int o, flags;
     char *endptr, *server;
     struct addrinfo *r, *res, hints;
     struct sigaction act;
@@ -265,7 +266,17 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    fcntl(client_fd, F_SETFL, (long)fcntl(client_fd, F_GETFL) | O_NONBLOCK);
+    flags = fcntl(client_fd, F_GETFL);
+    if (flags == -1) {
+        perror("fcntl F_GETFL");
+        exit(1);
+    }
+    flags = fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+    if (flags == -1) {
+        perror("fcntl F_SETFL O_NONBLOCK");
+        exit(1);
+    }
+
     parser = usbredirparser_create();
     if (!parser) {
         exit(1);
@@ -394,6 +405,7 @@ static int usbredirtestclient_cmdline_ctrl(void)
     }
     usbredirparser_send_control_packet(parser, id, &control_packet,
                                        data, data_len);
+    free(data);
     printf("Send control packet with id: %u\n", id);
     id++;
     return 1;

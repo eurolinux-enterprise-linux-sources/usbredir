@@ -66,7 +66,7 @@ struct usbredirparser_priv {
         struct usb_redir_header header;
         struct usb_redir_header_32bit_id header_32bit_id;
     };
-    uint8_t type_header[256];
+    uint8_t type_header[288];
     int header_read;
     int type_header_len;
     int type_header_read;
@@ -135,10 +135,25 @@ static void serialize_test(struct usbredirparser *parser_pub)
 
 static void usbredirparser_queue(struct usbredirparser *parser, uint32_t type,
     uint64_t id, void *type_header_in, uint8_t *data_in, int data_len);
+static int usbredirparser_caps_get_cap(struct usbredirparser_priv *parser,
+    uint32_t *caps, int cap);
 
 struct usbredirparser *usbredirparser_create(void)
 {
     return calloc(1, sizeof(struct usbredirparser_priv));
+}
+
+static void usbredirparser_verify_caps(struct usbredirparser_priv *parser,
+    uint32_t *caps, const char *desc)
+{
+    if (usbredirparser_caps_get_cap(parser, caps,
+                                    usb_redir_cap_bulk_streams) &&
+        !usbredirparser_caps_get_cap(parser, caps,
+                                     usb_redir_cap_ep_info_max_packet_size)) {
+        ERROR("error %s caps contains cap_bulk_streams without"
+              "cap_ep_info_max_packet_size", desc);
+        caps[0] &= ~(1 << usb_redir_cap_bulk_streams);
+    }
 }
 
 void usbredirparser_init(struct usbredirparser *parser_pub,
@@ -146,7 +161,7 @@ void usbredirparser_init(struct usbredirparser *parser_pub,
 {
     struct usbredirparser_priv *parser =
         (struct usbredirparser_priv *)parser_pub;
-    struct usb_redir_hello_header hello;
+    struct usb_redir_hello_header hello = { { 0 }, };
 
     parser->flags = (flags & ~usbredirparser_fl_no_hello);
     if (parser->callb.alloc_lock_func) {
@@ -162,6 +177,7 @@ void usbredirparser_init(struct usbredirparser *parser_pub,
     if (!(flags & usbredirparser_fl_usb_host))
         usbredirparser_caps_set_cap(parser->our_caps,
                                     usb_redir_cap_device_disconnect_ack);
+    usbredirparser_verify_caps(parser, parser->our_caps, "our");
     if (!(flags & usbredirparser_fl_no_hello))
         usbredirparser_queue(parser_pub, usb_redir_hello, 0, &hello,
                              (uint8_t *)parser->our_caps,
@@ -188,6 +204,20 @@ void usbredirparser_destroy(struct usbredirparser *parser_pub)
     free(parser);
 }
 
+static int usbredirparser_caps_get_cap(struct usbredirparser_priv *parser,
+    uint32_t *caps, int cap)
+{
+    if (cap / 32 >= USB_REDIR_CAPS_SIZE) {
+        ERROR("error request for out of bounds cap: %d", cap);
+        return 0;
+    }
+    if (caps[cap / 32] & (1 << (cap % 32))) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
 void usbredirparser_caps_set_cap(uint32_t *caps, int cap)
 {
     caps[cap / 32] |= 1 << (cap % 32);
@@ -205,26 +235,14 @@ int usbredirparser_peer_has_cap(struct usbredirparser *parser_pub, int cap)
 {
     struct usbredirparser_priv *parser =
         (struct usbredirparser_priv *)parser_pub;
-    if (cap / 32 >= USB_REDIR_CAPS_SIZE) {
-        ERROR("error request for out of bounds cap: %d", cap);
-        return 0;
-    }
-    if ((parser->peer_caps[cap / 32]) & (1 << (cap % 32))) {
-        return 1;
-    } else {
-        return 0;
-    }
+    return usbredirparser_caps_get_cap(parser, parser->peer_caps, cap);
 }
 
 int usbredirparser_have_cap(struct usbredirparser *parser_pub, int cap)
 {
     struct usbredirparser_priv *parser =
         (struct usbredirparser_priv *)parser_pub;
-    if ((parser->our_caps[cap / 32]) & (1 << (cap % 32))) {
-        return 1;
-    } else {
-        return 0;
-    }
+    return usbredirparser_caps_get_cap(parser, parser->our_caps, cap);
 }
 
 static int usbredirparser_using_32bits_ids(struct usbredirparser *parser_pub)
@@ -258,6 +276,7 @@ static void usbredirparser_handle_hello(struct usbredirparser *parser_pub,
     for (i = 0; i < data_len / sizeof(uint32_t); i++) {
         parser->peer_caps[i] = peer_caps[i];
     }
+    usbredirparser_verify_caps(parser, parser->peer_caps, "peer");
     parser->have_peer_caps = 1;
     free(data);
 
@@ -328,10 +347,15 @@ static int usbredirparser_get_type_header_len(
     case usb_redir_ep_info:
         if (!command_for_host) {
             if (usbredirparser_have_cap(parser_pub,
-                                    usb_redir_cap_ep_info_max_packet_size) &&
+                                    usb_redir_cap_bulk_streams) &&
                 usbredirparser_peer_has_cap(parser_pub,
-                                    usb_redir_cap_ep_info_max_packet_size)) {
+                                    usb_redir_cap_bulk_streams)) {
                 return sizeof(struct usb_redir_ep_info_header);
+            } else if (usbredirparser_have_cap(parser_pub,
+                                    usb_redir_cap_ep_info_max_packet_size) &&
+                       usbredirparser_peer_has_cap(parser_pub,
+                                    usb_redir_cap_ep_info_max_packet_size)) {
+                return sizeof(struct usb_redir_ep_info_header_no_max_streams);
             } else {
                 return sizeof(struct usb_redir_ep_info_header_no_max_pktsz);
             }
@@ -974,7 +998,8 @@ int usbredirparser_do_read(struct usbredirparser *parser_pub)
                 if ((int)parser->header.length < type_header_len ||
                     ((int)parser->header.length > type_header_len &&
                      !usbredirparser_expect_extra_data(parser))) {
-                    ERROR("error invalid packet length: %u", parser->header.length);
+                    ERROR("error invalid packet type %u length: %u",
+                          parser->header.type, parser->header.length);
                     parser->to_skip = parser->header.length;
                     parser->header_read = 0;
                     return -2;
@@ -1010,6 +1035,8 @@ int usbredirparser_do_read(struct usbredirparser *parser_pub)
                 parser->data = NULL;
                 if (!r)
                     return -2;
+                /* header len may change if this was an hello packet */
+                header_len = usbredirparser_get_header_len(parser_pub);
             }
         }
     }
@@ -1039,7 +1066,7 @@ int usbredirparser_do_write(struct usbredirparser *parser_pub)
         w = parser->callb.write_func(parser->callb.priv,
                                      wbuf->buf + wbuf->pos, w);
         if (w <= 0) {
-            ret = -1;
+            ret = w;
             break;
         }
 
@@ -1655,10 +1682,24 @@ int usbredirparser_unserialize(struct usbredirparser *parser_pub,
     memcpy(orig_caps, parser->our_caps, i);
     if (unserialize_data(parser, &state, &remain, &data, &i, "our_caps"))
         return -1;
-    if (memcmp(parser->our_caps, orig_caps,
-               USB_REDIR_CAPS_SIZE * sizeof(int32_t)) != 0) {
-        ERROR("error unserialize caps mismatch");
-        return -1;
+    for (i =0; i < USB_REDIR_CAPS_SIZE; i++) {
+        if (parser->our_caps[i] != orig_caps[i]) {
+            /* orig_caps is our original settings
+             * parser->our_caps is off the wire.
+             * We want to allow reception from an older
+             * usbredir that doesn't have all our features.
+             */
+            if (parser->our_caps[i] & ~orig_caps[i]) {
+                /* Source has a cap we don't */
+                ERROR("error unserialize caps mismatch ours: %x recv: %x",
+                      orig_caps[i], parser->our_caps[i]);
+                return -1;
+            } else {
+                /* We've got a cap the source doesn't - that's OK */
+                WARNING("unserialize missing some caps; ours: %x recv: %x",
+                      orig_caps[i], parser->our_caps[i]);
+            }
+        }
     }
 
     data = (uint8_t *)parser->peer_caps;

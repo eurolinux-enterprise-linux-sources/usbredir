@@ -42,6 +42,12 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define USBREDIR_VERSION 0x000701 /* 0.7 [.0] */
+
 enum {
     usb_redir_success,
     usb_redir_cancelled,    /* The transfer was cancelled */
@@ -163,6 +169,7 @@ struct usb_redir_ep_info_header {
     uint8_t interval[32];
     uint8_t interface[32];
     uint16_t max_packet_size[32];
+    uint32_t max_streams[32];
 } ATTR_PACKED;
 
 struct usb_redir_set_configuration_header {
@@ -218,18 +225,18 @@ struct usb_redir_interrupt_receiving_status_header {
 } ATTR_PACKED;
 
 struct usb_redir_alloc_bulk_streams_header {
-    uint8_t endpoint;
-    uint8_t no_streams;
+    uint32_t endpoints; /* bitmask indicating on which eps to alloc streams */
+    uint32_t no_streams;
 } ATTR_PACKED;
 
 struct usb_redir_free_bulk_streams_header {
-    uint8_t endpoint;
+    uint32_t endpoints; /* bitmask indicating on which eps to free streams */
 } ATTR_PACKED;
 
 struct usb_redir_bulk_streams_status_header {
+    uint32_t endpoints; /* bitmask indicating eps this status message is for */
+    uint32_t no_streams;
     uint8_t status;
-    uint8_t endpoint;
-    uint8_t no_streams;
 } ATTR_PACKED;
 
 struct usb_redir_start_bulk_receiving_header {
@@ -291,6 +298,10 @@ struct usb_redir_buffered_bulk_packet_header {
 
 #if defined(__MINGW32__) || !defined(__GNUC__)
 #pragma pack(pop)
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif
