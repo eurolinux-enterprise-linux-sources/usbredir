@@ -1,14 +1,14 @@
 Name:           usbredir
 Version:        0.7.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        USB network redirection protocol libraries
 Group:          System Environment/Libraries
 License:        LGPLv2+
-URL:            http://spice-space.org/page/UsbRedir
-Source0:        http://spice-space.org/download/%{name}/%{name}-%{version}.tar.bz2
+URL:            https://www.spice-space.org
+Source0:        https://www.spice-space.org/download/%{name}/%{name}-%{version}.tar.bz2
 # Some patches from upstream git (drop at next rebase)
 Patch1:         0001-usbredirhost-Fix-Wformat-warning.patch
-BuildRequires:  libusb1-devel >= 1.0.9
+BuildRequires:  libusb1-devel >= 1.0.20
 
 %description
 The usbredir libraries allow USB devices to be used on remote and/or virtual
@@ -81,6 +81,10 @@ rm $RPM_BUILD_ROOT%{_libdir}/libusbredir*.la
 
 
 %changelog
+* Tue Dec 20 2016 Pavel Grunt <pgrunt@redhat.com> - 0.7.1-2
+- Rebuild to add USB3 support
+  Resolves: rhbz#976685
+
 * Wed Jun  8 2016 Victor Toso <victortoso@redhat.com> - 0.7.1-1
 - Rebase to latest upstream: 0.7.1
   Resolves: rhbz#1033101
