@@ -1,0 +1,32 @@
+From 3f85be6da588d17f272a4b3c9b34bbfb7510f1e7 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Mon, 13 May 2013 10:30:30 +0200
+Subject: [PATCH 3/3] usbredirhost: Fix coverity sign_extension warning
+
+Coverity does not like uint8_t * int being casted to an uint64_t, change
+the int to an unsigned int to make it happy.
+
+Note that the int in question can never be > 255, so this is not a real issue.
+
+Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+---
+ usbredirhost/usbredirhost.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/usbredirhost/usbredirhost.c b/usbredirhost/usbredirhost.c
+index da3ef90..09745c2 100644
+--- a/usbredirhost/usbredirhost.c
++++ b/usbredirhost/usbredirhost.c
+@@ -1041,7 +1041,8 @@ static int usbredirhost_submit_stream_transfer_unlocked(
+ static int usbredirhost_start_stream_unlocked(struct usbredirhost *host,
+     uint8_t ep)
+ {
+-    int i, status, count = host->endpoint[EP2I(ep)].transfer_count;
++    unsigned int i, count = host->endpoint[EP2I(ep)].transfer_count;
++    int status;
+ 
+     /* For out endpoints 1/2 the transfers are a buffer for usb-guest data */
+     if (!(ep & LIBUSB_ENDPOINT_IN)) {
+-- 
+1.8.2.1
+
