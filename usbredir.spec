@@ -1,6 +1,6 @@
 Name:           usbredir
 Version:        0.6
-Release:        5%{?dist}
+Release:        7%{?dist}
 Summary:        USB network redirection protocol libraries
 Group:          System Environment/Libraries
 License:        LGPLv2+
@@ -89,6 +89,12 @@ rm $RPM_BUILD_ROOT%{_libdir}/libusbredir*.la
 
 
 %changelog
+* Fri Jan 24 2014 Daniel Mach <dmach@redhat.com> - 0.6-7
+- Mass rebuild 2014-01-24
+
+* Fri Dec 27 2013 Daniel Mach <dmach@redhat.com> - 0.6-6
+- Mass rebuild 2013-12-27
+
 * Tue Sep 10 2013 Hans de Goede <hdegoede@redhat.com> - 0.6-5
 - Use the new libusb autodetach kernel driver functionality
 - Fix a usbredirparser bug which causes tcp/ip redir to not work (rhbz#1005015)
